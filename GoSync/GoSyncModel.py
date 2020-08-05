@@ -235,6 +235,9 @@ class GoSyncModel(object):
                 self.can_autostart = False
         self.SendToLog(3,"Initialize - Completed GoogleDriveTree File")
         self.SendToLog(3,"Initialize - Completed Initialize")
+        self.init_sync_selection = []
+        self.GetRootSyncSelection()
+        self.initial_sync()
 
 # Sends Log Level Message to Log File
 # Depends on Log_Level constant
@@ -1183,69 +1186,103 @@ class GoSyncModel(object):
         abs_filepath = os.path.join(download_path, file_obj['name'])
         PrepareDownload(abs_filepath)
 
-        if os.path.exists(abs_filepath):
-            if self.HashOfFile(abs_filepath) == file_obj['md5Checksum']:
-                self.SendToLog(2,'DownloadFileByObject: Skipping File (%s) - same as remote.\n' % abs_filepath)
-                return
-            else:
-                self.SendToLog(2,"DownloadFileByObject: Skipping File (%s) - Local and Remote - Same Name but Different Content.\n" % abs_filepath)
-        else:
-            self.SendToLog(3,'DownloadFileByObject: Download Started - File (%s), size (%s)' % (abs_filepath, file_obj['size']))
-            total_size = int(file_obj['size'])
-            fd = abs_filepath.split(self.mirror_directory+'/')[1]
-            retries = 5
-            while True:
-                try:
-                    if ( total_size == 0) :
-                        GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {'Downloading %s' % fd})
-                        open(abs_filepath, 'a').close()
-                        break 
-                    elif ( total_size < LargeFileSize) :
-                        GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {'Downloading %s' % fd})
-                        request = self.drive.files().get_media(fileId=file_obj['id'])
-                        fh = io.FileIO(abs_filepath, 'wb')
-                        downloader = MediaIoBaseDownload(fh, request)
-                        done = False
-                        while done is False:
+        self.SendToLog(3,'DownloadFileByObject: Download Started - File (%s), size (%s)' % (abs_filepath, file_obj['size']))
+        total_size = int(file_obj['size'])
+        fd = abs_filepath.split(self.mirror_directory+'/')[1]
+        retries = 5
+        while True:
+            try:
+                if ( total_size == 0) :
+                    GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {'Downloading %s' % fd})
+                    open(abs_filepath, 'a').close()
+                    break 
+                elif ( total_size < LargeFileSize) :
+                    GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {'Downloading %s' % fd})
+                    request = self.drive.files().get_media(fileId=file_obj['id'])
+                    fh = io.FileIO(abs_filepath, 'wb')
+                    downloader = MediaIoBaseDownload(fh, request)
+                    done = False
+                    while done is False:
+                        if AbortingDownload() :
+                            break
+                        else :
+                            status, done = downloader.next_chunk()
+                    fh.close()
+                    break 
+                else :
+                    # Downloading large files : 100M chunk size
+                    GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {'Downloading %s' % fd})
+                    s = partial(total_size, LargeBlockSize) 
+                    with open(abs_filepath, 'wb') as file:
+                        for bytes in s:
                             if AbortingDownload() :
                                 break
                             else :
-                                status, done = downloader.next_chunk()
-                        fh.close()
-                        break 
-                    else :
-                        # Downloading large files : 100M chunk size
-                        GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {'Downloading %s' % fd})
-                        s = partial(total_size, LargeBlockSize) 
-                        with open(abs_filepath, 'wb') as file:
-                            for bytes in s:
-                                if AbortingDownload() :
-                                    break
-                                else :
-                                    request = self.drive.files().get_media(fileId=file_obj['id'])
-                                    GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {'Downloading (%s) %s%%\n' % (fd, str(int(bytes[1]/total_size*100)))})
-                                    request.headers["Range"] = "bytes={}-{}".format(bytes[0], bytes[1]) 
-                                    fh = io.BytesIO(request.execute())
-                                    file.write(fh.getvalue())
-                                    file.flush()
-                        break 
-                except Exception as err:
-                    retries = RetryAndContinue(retries, str(err))
-                    if retries > 0 : 
-                        continue
-                    else :
-                        CleanUpDownload(abs_filepath)
-                        raise
-            if AbortingDownload() :
-                CleanUpDownload(abs_filepath)
-                self.updates_done = 1
-                self.SendToLog(2,'DownloadFileByObject: Download Aborted - File (%s)\n' % abs_filepath)
-                GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {''})
-            else :
-                self.updates_done = 1
-                self.SendToLog(2,'DownloadFileByObject: Download Completed - File (%s)\n' % abs_filepath)
-                GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {''})
+                                request = self.drive.files().get_media(fileId=file_obj['id'])
+                                GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {'Downloading (%s) %s%%\n' % (fd, str(int(bytes[1]/total_size*100)))})
+                                request.headers["Range"] = "bytes={}-{}".format(bytes[0], bytes[1]) 
+                                fh = io.BytesIO(request.execute())
+                                file.write(fh.getvalue())
+                                file.flush()
+                    break 
+            except Exception as err:
+                retries = RetryAndContinue(retries, str(err))
+                if retries > 0 : 
+                    continue
+                else :
+                    CleanUpDownload(abs_filepath)
+                    raise
+        if AbortingDownload() :
+            CleanUpDownload(abs_filepath)
+            self.updates_done = 1
+            self.SendToLog(2,'DownloadFileByObject: Download Aborted - File (%s)\n' % abs_filepath)
+            GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {''})
+        else :
+            self.updates_done = 1
+            self.SendToLog(2,'DownloadFileByObject: Download Completed - File (%s)\n' % abs_filepath)
+            GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {''})
 
+#### Initial Synchronization
+    def initial_sync(self):
+        for RemoteDirectory in self.init_sync_selection :
+            DirectoryExists = True
+            if RemoteDirectory[0] == 'root':
+                continue
+            if not os.path.exists(os.path.join(self.mirror_directory, RemoteDirectory[0])):
+                parentDirectory = os.path.join(self.mirror_directory, RemoteDirectory[0])
+                os.makedirs(os.path.join(self.mirror_directory, RemoteDirectory[0]))
+                DirectoryExists = False
+            self.DownloadFilesFromRemoteDirectory(parentDirectory, DirectoryExists)
+
+    def DownloadFilesFromRemoteDirectory(self, ParentDirectory, DirectoryExists) :
+        try:
+            if not self.syncRunning.is_set() or self.shutting_down:
+                self.SendToLog(2, "SyncRemoteDirectory: Sync has been paused. Aborting.")
+                return
+
+            file_list = self.MakeFileListQuery("'%s' in parents and trashed=false" % parent)
+
+            #This direcotry is empty nothing to sync.
+            if not file_list:
+                return
+
+            for f in file_list:
+                GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {"Checking: %s" % f['name']})
+
+                if not self.syncRunning.is_set() or self.shutting_down:
+                    self.SendToLog(3, "SyncRemoteDirectory: Sync has been paused. Aborting download")
+                    return
+
+                if DirectoryExists:
+                    self.DownloadFileByObject(f, os.path.join(self.mirror_directory, pwd))
+
+        except InternetNotReachable:
+            self.SendToLog(1, "SyncRemoteDirectory: Internet not reachable\n")
+            raise
+        except:
+            self.SendToLog(1,"SyncRemoteDirectory: Failed to sync directory (%s)" % f['name'])
+            raise
+        self.SendToLog(3,"### SyncRemoteDirectory: - Sync Completed - Remote Directory (%s) ... Recursive = %s\n" % (pwd, recursive))
 
 #### SyncRemoteDirectory
     def SyncRemoteDirectory(self, parent, pwd, recursive=True):
@@ -1630,6 +1667,21 @@ class GoSyncModel(object):
     def ClearSyncSelection(self):
         self.sync_selection = [['root', '']]
 
+
+    def GetRootChildSyncSelection(self, folder):
+        listpath = folder.GetChildren()
+        for p in listpath:
+            self.init_sync_selection.append([p.GetPath(), p.GetId()])
+            self.GetRootChildSyncSelection(p)
+
+
+    def GetRootSyncSelection(self):
+        self.init_sync_selection = [['root', '']]
+        listpath = self.driveTree.GetRoot().GetChildren()
+        for p in listpath:
+            self.init_sync_selection.append([p.GetPath(), p.GetId()])
+            self.GetRootChildSyncSelection(p)
+ 
     def SetSyncSelection(self, folder):
         if folder == 'root':
             self.sync_selection = [['root', '']]
