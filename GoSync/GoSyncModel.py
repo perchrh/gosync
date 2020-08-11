@@ -237,7 +237,7 @@ class GoSyncModel(object):
         self.SendToLog(3,"Initialize - Completed Initialize")
         self.init_sync_selection = []
         self.GetRootSyncSelection()
-        self.initial_sync()
+        self.initialSync()
 
 # Sends Log Level Message to Log File
 # Depends on Log_Level constant
@@ -1242,47 +1242,114 @@ class GoSyncModel(object):
             self.SendToLog(2,'DownloadFileByObject: Download Completed - File (%s)\n' % abs_filepath)
             GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {''})
 
+############################
 #### Initial Synchronization
-    def initial_sync(self):
+############################
+    def initialSync(self):
+        def GetRemoteDir(parentID):
+            ChildDir = []
+            for Child in self.driveTree.FindFolder(parentID).GetChildren():
+                ChildDir.append(Child.name)
+            return ChildDir
+
+        
+        self.SendToLog(2, "initialSync: Entering.")
         for RemoteDirectory in self.init_sync_selection :
             DirectoryExists = True
-            if RemoteDirectory[0] == 'root':
-                continue
-            if not os.path.exists(os.path.join(self.mirror_directory, RemoteDirectory[0])):
+            RemoteProcessedDirectories = []
+            RemoteProcessedFiles = []
+            self.SendToLog(2, "initialSync: RemoteDirectory: '%s'." % RemoteDirectory)
+            if RemoteDirectory[0] == 'root' :
+                parentDirectory = os.path.join(self.mirror_directory, RemoteDirectory[1])
+                parentID = RemoteDirectory[0]
+            else :
                 parentDirectory = os.path.join(self.mirror_directory, RemoteDirectory[0])
-                os.makedirs(os.path.join(self.mirror_directory, RemoteDirectory[0]))
-                DirectoryExists = False
-            self.DownloadFilesFromRemoteDirectory(parentDirectory, DirectoryExists)
+                parentID = RemoteDirectory[1]
+                if not os.path.exists(os.path.join(self.mirror_directory, parentDirectory)):
+                    os.makedirs(parentDirectory)
+                    DirectoryExists = False
+            RemoteProcessedDirectories = GetRemoteDir(parentID)
+            self.SendToLog(2, "initialSync: ProcessFilesFromRemoteDirectory")
+#            ProcessedFiles = self.ProcessFilesFromRemoteDirectory(RemoteDirectory[0], parentDirectory, DirectoryExists)
+            RemoteProcessedFiles = self.ProcessFilesFromRemoteDirectory(parentID, parentDirectory, DirectoryExists)
+            if DirectoryExists :
+                self.ProcessFilesFromLocalDirectory(parentDirectory, RemoteProcessedFiles)
+                self.ProcessLocalSubDirectories(parentDirectory, RemoteProcessedDirectories)
 
-    def DownloadFilesFromRemoteDirectory(self, ParentDirectory, DirectoryExists) :
+    def ProcessLocalSubDirectories(self, parentDirectory, RemoteDirectoryList) :
+        with os.scandir(parentDirectory) as it:
+            for entry in it:
+                if not entry.name.startswith('.') and entry.is_dir():
+                    if entry.name in RemoteDirectoryList:
+                        print('Dir %s already processed' % entry.name)  
+                    else:  
+                        print('Dir %s NOT PROCESSED' % entry.name)    
+
+    def ProcessFilesFromLocalDirectory(self, parentDirectory, RemoteProcessedFiles) :
+        with os.scandir(parentDirectory) as it:
+            for entry in it:
+                if not entry.name.startswith('.') and entry.is_file():
+                    if entry.name in RemoteProcessedFiles:
+                        print('File %s already processed' % entry.name)  
+                    else:  
+                        print('File %s NOT PROCESSED' % entry.name)    
+
+    def ProcessFilesFromRemoteDirectory(self, parentID, parentDirectoryPath, DirectoryExists) :
+#        self.SendToLog(2, "ProcessFilesFromRemoteDirectory: Entering. %s" % parentDirectoryPath)
+        files_mimelist_criteria = "(mimeType !='application/vnd.google-apps.spreadsheet' \
+                              and mimeType !='application/vnd.google-apps.sites' \
+                              and mimeType !='application/vnd.google-apps.script' \
+                              and mimeType !='application/vnd.google-apps.presentation' \
+                              and mimeType !='application/vnd.google-apps.fusiontable' \
+                              and mimeType !='application/vnd.google-apps.form' \
+                              and mimeType !='application/vnd.google-apps.drawing' \
+                              and mimeType !='application/vnd.google-apps.document' \
+                              and mimeType !='application/vnd.google-apps.map' \
+                              and mimeType !='application/vnd.google-apps.folder')"
+        ProcessedFiles = []
         try:
+            """
             if not self.syncRunning.is_set() or self.shutting_down:
-                self.SendToLog(2, "SyncRemoteDirectory: Sync has been paused. Aborting.")
-                return
-
-            file_list = self.MakeFileListQuery("'%s' in parents and trashed=false" % parent)
+                self.SendToLog(2, "ProcessFilesFromRemoteDirectory: Sync has been paused. Aborting.")
+                return ProcessedFiles
+            """
+#            print("'%s' in parents and trashed=false and %s" % (parentID, files_mimelist_criteria))
+            file_list = self.MakeFileListQuery("'%s' in parents and trashed=false and %s" % (parentID, files_mimelist_criteria))
+            self.SendToLog(2, "ProcessFilesFromRemoteDirectory: %s." % parentDirectoryPath)
 
             #This direcotry is empty nothing to sync.
             if not file_list:
-                return
+                return ProcessedFiles
 
             for f in file_list:
                 GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {"Checking: %s" % f['name']})
 
+                """                
                 if not self.syncRunning.is_set() or self.shutting_down:
-                    self.SendToLog(3, "SyncRemoteDirectory: Sync has been paused. Aborting download")
-                    return
+                    self.SendToLog(3, "ProcessFilesFromRemoteDirectory: Sync has been paused. Aborting download")
+                    return ProcessedFiles
+                """                
+                abs_filepath = os.path.join(self.mirror_directory, f['name'])
 
-                if DirectoryExists:
-                    self.DownloadFileByObject(f, os.path.join(self.mirror_directory, pwd))
+                if DirectoryExists and os.path.exists(abs_filepath):
+                    if self.HashOfFile(abs_filepath) == f['md5Checksum']:
+                        self.SendToLog(2,'ProcessFilesFromRemoteDirectory: Skipping File (%s) - same as remote.\n' % abs_filepath)
+                    else:
+                        self.SendToLog(2,"ProcessFilesFromRemoteDirectory: Skipping File (%s) - Local and Remote - Same Name but Different Content.\n" % abs_filepath)
+                    ProcessedFiles.append(f['name'])
+                else:
+#                    self.DownloadFileByObject(f, os.path.join(self.mirror_directory, pwd))
+#                    ProcessedFiles.append(abs_filepath)
+                    ProcessedFiles.append(f['name'])
 
-        except InternetNotReachable:
-            self.SendToLog(1, "SyncRemoteDirectory: Internet not reachable\n")
-            raise
+#        except InternetNotReachable:
+#            self.SendToLog(1, "ProcessFilesFromRemoteDirectory: Internet not reachable\n")
+#            raise
         except:
-            self.SendToLog(1,"SyncRemoteDirectory: Failed to sync directory (%s)" % f['name'])
+            self.SendToLog(1,"ProcessFilesFromRemoteDirectory: Failed to sync file (%s)" % f['name'])
             raise
-        self.SendToLog(3,"### SyncRemoteDirectory: - Sync Completed - Remote Directory (%s) ... Recursive = %s\n" % (pwd, recursive))
+        self.SendToLog(3,"### ProcessFilesFromRemoteDirectory: - Sync Completed - Remote Directory (%s)" % (parentDirectoryPath))
+        return ProcessedFiles
 
 #### SyncRemoteDirectory
     def SyncRemoteDirectory(self, parent, pwd, recursive=True):
