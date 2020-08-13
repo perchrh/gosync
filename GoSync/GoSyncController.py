@@ -81,10 +81,7 @@ class PageAccount(wx.Panel):
 
     def OnUsageCalculationDone(self, event):
         if not event.data:
-            if (self.sync_model.fcount == 0 and self.sync_model.foldercount == 0) :
-                self.driveUsageBar.SetStatusMessage("Your Google Drive usage is shown below :")
-            else : 
-                self.driveUsageBar.SetStatusMessage("Your Google Drive usage is shown below :\n (%s files in %s folders)" % (self.sync_model.fcount, self.sync_model.foldercount))
+            self.driveUsageBar.SetStatusMessage("Your Google Drive usage is shown below:")
             self.driveUsageBar.SetMoviesUsage(self.sync_model.GetMovieUsage())
             self.driveUsageBar.SetDocumentUsage(self.sync_model.GetDocumentUsage())
             self.driveUsageBar.SetOthersUsage(self.sync_model.GetOthersUsage())
@@ -308,7 +305,7 @@ class GoSyncController(wx.Frame):
         if not event.data:
             if self.sync_model.GetUseSystemNotifSetting():
                 if wxgtk4:
-                    nmsg = wx.adv.NotificationMessage(title="GoSync", message="Sync Completed with %s files updated." % self.sync_model.fcountSync)
+                    nmsg = wx.adv.NotificationMessage(title="GoSync", message="Sync Completed!")
                     nmsg.SetFlags(wx.ICON_INFORMATION)
                     nmsg.Show(timeout=wx.adv.NotificationMessage.Timeout_Auto)
                 else:
