@@ -108,6 +108,9 @@ class GoSyncModel(object):
         self.Log_Level = 3 # 1=error, 2=info, 3=debug
         self.savedTotalSize = 0
         self.fcount = 0
+        self.foldercount = 0
+        self.fcountSync = 0
+        self.foldercountSync = 0
         self.updates_done = 0
         self.syncing_now = False
         self.force_usage_calculation = False
@@ -236,8 +239,11 @@ class GoSyncModel(object):
         self.SendToLog(3,"Initialize - Completed GoogleDriveTree File")
         self.SendToLog(3,"Initialize - Completed Initialize")
         self.init_sync_selection = []
-        self.GetRootSyncSelection()
-        self.initialSync()
+#        if self.sync_selection[0][0] == 'root':
+#            self.GetRootSyncSelection()
+#        else :
+#            self.GetSelectedSyncSelection()
+#        self.initialSync()
 
 # Sends Log Level Message to Log File
 # Depends on Log_Level constant
@@ -1041,7 +1047,6 @@ class GoSyncModel(object):
                         self.SendToLog(1, "Internet is down\n")
                         raise InternetNotReachable()
                     else:
-                        self.SendToLog(3, "Empty Folder\n")
                         return None
                 else:
                     return filelist
@@ -1177,7 +1182,8 @@ class GoSyncModel(object):
             pass
 
         def AbortingDownload():
-            return not self.syncRunning.is_set() or self.shutting_down
+            return False
+#            return not self.syncRunning.is_set() or self.shutting_down
 
         def CleanUpDownload(download_path):
             if os.path.exists(download_path):
@@ -1246,16 +1252,18 @@ class GoSyncModel(object):
 #### Initial Synchronization
 ############################
     def initialSync(self):
-        def GetRemoteDir(parentID):
+        def GetRemoteSubDir(parentID):
             ChildDir = []
             for Child in self.driveTree.FindFolder(parentID).GetChildren():
                 ChildDir.append(Child.name)
             return ChildDir
 
         
+        print(self.init_sync_selection)
+        print(self.sync_selection)
         self.SendToLog(2, "initialSync: Entering.")
         for RemoteDirectory in self.init_sync_selection :
-            DirectoryExists = True
+            DirectoryAlreadyExisted = True
             RemoteProcessedDirectories = []
             RemoteProcessedFiles = []
             self.SendToLog(2, "initialSync: RemoteDirectory: '%s'." % RemoteDirectory)
@@ -1267,12 +1275,11 @@ class GoSyncModel(object):
                 parentID = RemoteDirectory[1]
                 if not os.path.exists(os.path.join(self.mirror_directory, parentDirectory)):
                     os.makedirs(parentDirectory)
-                    DirectoryExists = False
-            RemoteProcessedDirectories = GetRemoteDir(parentID)
+                    DirectoryAlreadyExisted = False
+            RemoteProcessedDirectories = GetRemoteSubDir(parentID)
             self.SendToLog(2, "initialSync: ProcessFilesFromRemoteDirectory")
-#            ProcessedFiles = self.ProcessFilesFromRemoteDirectory(RemoteDirectory[0], parentDirectory, DirectoryExists)
-            RemoteProcessedFiles = self.ProcessFilesFromRemoteDirectory(parentID, parentDirectory, DirectoryExists)
-            if DirectoryExists :
+            RemoteProcessedFiles = self.ProcessFilesFromRemoteDirectory(parentID, parentDirectory, DirectoryAlreadyExisted)
+            if (DirectoryAlreadyExisted) :
                 self.ProcessFilesFromLocalDirectory(parentDirectory, RemoteProcessedFiles)
                 self.ProcessLocalSubDirectories(parentDirectory, RemoteProcessedDirectories)
 
@@ -1283,6 +1290,8 @@ class GoSyncModel(object):
                     if entry.name in RemoteDirectoryList:
                         print('Dir %s already processed' % entry.name)  
                     else:  
+#                        GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {"Creating Folder: %s" % f['name']})
+#                        self.UploadFolder(dirpath)
                         print('Dir %s NOT PROCESSED' % entry.name)    
 
     def ProcessFilesFromLocalDirectory(self, parentDirectory, RemoteProcessedFiles) :
@@ -1292,6 +1301,13 @@ class GoSyncModel(object):
                     if entry.name in RemoteProcessedFiles:
                         print('File %s already processed' % entry.name)  
                     else:  
+#                        self.SendToLog(2,"SyncLocalDirectory: Uploading Local File (%s) - Not in Remote\n" % dirpath)
+#                        GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE,
+#                                                              {"Uploading: %s" % self.GetRelativeFolder(dirpath, False)})
+                        abs_filepath = os.path.join(parentDirectory, entry.name)
+                        print('File %s NOT PROCESSED' % abs_filepath)  
+                        self.fcountSync += 1
+                        self.UploadFile(abs_filepath)
                         print('File %s NOT PROCESSED' % entry.name)    
 
     def ProcessFilesFromRemoteDirectory(self, parentID, parentDirectoryPath, DirectoryExists) :
@@ -1308,12 +1324,9 @@ class GoSyncModel(object):
                               and mimeType !='application/vnd.google-apps.folder')"
         ProcessedFiles = []
         try:
-            """
             if not self.syncRunning.is_set() or self.shutting_down:
                 self.SendToLog(2, "ProcessFilesFromRemoteDirectory: Sync has been paused. Aborting.")
                 return ProcessedFiles
-            """
-#            print("'%s' in parents and trashed=false and %s" % (parentID, files_mimelist_criteria))
             file_list = self.MakeFileListQuery("'%s' in parents and trashed=false and %s" % (parentID, files_mimelist_criteria))
             self.SendToLog(2, "ProcessFilesFromRemoteDirectory: %s." % parentDirectoryPath)
 
@@ -1324,12 +1337,12 @@ class GoSyncModel(object):
             for f in file_list:
                 GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_UPDATE, {"Checking: %s" % f['name']})
 
-                """                
                 if not self.syncRunning.is_set() or self.shutting_down:
                     self.SendToLog(3, "ProcessFilesFromRemoteDirectory: Sync has been paused. Aborting download")
                     return ProcessedFiles
-                """                
-                abs_filepath = os.path.join(self.mirror_directory, f['name'])
+                abs_filepath = os.path.join(parentDirectoryPath, f['name'])
+                self.fcountSync += 1
+
 
                 if DirectoryExists and os.path.exists(abs_filepath):
                     if self.HashOfFile(abs_filepath) == f['md5Checksum']:
@@ -1338,8 +1351,8 @@ class GoSyncModel(object):
                         self.SendToLog(2,"ProcessFilesFromRemoteDirectory: Skipping File (%s) - Local and Remote - Same Name but Different Content.\n" % abs_filepath)
                     ProcessedFiles.append(f['name'])
                 else:
-#                    self.DownloadFileByObject(f, os.path.join(self.mirror_directory, pwd))
-#                    ProcessedFiles.append(abs_filepath)
+                    self.DownloadFileByObject(f, parentDirectoryPath)
+#                    print(abs_filepath)
                     ProcessedFiles.append(f['name'])
 
 #        except InternetNotReachable:
@@ -1490,19 +1503,27 @@ class GoSyncModel(object):
             self.SendToLog(2, "SyncThread - run - Staring the sync now")
             self.syncing_now = True
             try:
+                self.fcountSync = 0
+                self.foldercountSync = 0
                 GoSyncEventController().PostEvent(GOSYNC_EVENT_SYNC_STARTED, None)
                 self.SendToLog(3,"###############################################")
                 self.SendToLog(3,"Start - Syncing remote directory")
                 self.SendToLog(3,"###############################################")
-                for d in self.sync_selection:
-                    if d[0] != 'root':
-                        #Root folder files are always synced (not recursive)
-                        self.SyncRemoteDirectory('root', '', False)
-                        #Then sync current folder (recursively)
-                        self.SyncRemoteDirectory(d[1], d[0])
-                    else:
-                        #Sync Root folder (recursively)
-                        self.SyncRemoteDirectory('root', '')
+                if self.sync_selection[0][0] == 'root':
+                    self.GetRootSyncSelection()
+                else :
+                    self.GetSelectedSyncSelection()
+                self.initialSync()
+
+#                for d in self.sync_selection:
+#                    if d[0] != 'root':
+#                        #Root folder files are always synced (not recursive)
+#                        self.SyncRemoteDirectory('root', '', False)
+#                        #Then sync current folder (recursively)
+#                        self.SyncRemoteDirectory(d[1], d[0])
+#                    else:
+#                        #Sync Root folder (recursively)
+#                        self.SyncRemoteDirectory('root', '')
                 self.SendToLog(3,"###############################################")
                 self.SendToLog(3,"End - Syncing remote directory")
                 self.SendToLog(3,"###############################################\n")
@@ -1511,7 +1532,7 @@ class GoSyncModel(object):
                 self.SendToLog(3,"###############################################")
                 self.SendToLog(3,"Start - Syncing local directory")
                 self.SendToLog(3,"###############################################")
-                self.SyncLocalDirectory()
+#                self.SyncLocalDirectory()
                 self.SendToLog(3,"###############################################")
                 self.SendToLog(3,"End - Syncing local directory")
                 self.SendToLog(3,"###############################################\n")
@@ -1568,13 +1589,52 @@ class GoSyncModel(object):
             return 0
 
 #### calculateUsageOfFolder
+    def createFolderTree(self, folder_id):
+        try:
+            if self.shutting_down:
+                self.SendToLog(3, "createFolderTree: GoSync is shutting down!")
+                return
+
+            directory_mimelist_criteria = "mimeType ='application/vnd.google-apps.folder'"
+            file_list = self.MakeFileListQuery("'%s' in parents and trashed=false and %s" % (folder_id, directory_mimelist_criteria))
+
+            #Folder is empty
+            if not file_list:
+                return
+
+            for f in file_list:
+                if self.shutting_down:
+                    self.SendToLog(3, "createFolderTree: GoSync is shutting down!")
+                    return
+
+                self.foldercount += 1
+                self.SendToLog(3, "createFolderTree: Scanning: %s (%s -> %s)" % (f['name'], f['id'], folder_id))
+                GoSyncEventController().PostEvent(GOSYNC_EVENT_SCAN_UPDATE, {'Building Folder Tree : %s' % f['name']})
+                self.driveTree.AddFolder(folder_id, f['id'], f['name'], f)
+                self.createFolderTree(f['id'])
+        except:
+            raise
+
     def calculateUsageOfFolder(self, folder_id):
         try:
             if self.shutting_down:
                 self.SendToLog(3, "calculateUsageOfFolder: GoSync is shutting down!")
                 return
+#####
+            files_mimelist_criteria = "(mimeType !='application/vnd.google-apps.spreadsheet' \
+                                and mimeType !='application/vnd.google-apps.sites' \
+                                and mimeType !='application/vnd.google-apps.script' \
+                                and mimeType !='application/vnd.google-apps.presentation' \
+                                and mimeType !='application/vnd.google-apps.fusiontable' \
+                                and mimeType !='application/vnd.google-apps.form' \
+                                and mimeType !='application/vnd.google-apps.drawing' \
+                                and mimeType !='application/vnd.google-apps.document' \
+                                and mimeType !='application/vnd.google-apps.map' \
+                                and mimeType !='application/vnd.google-apps.folder')"
+            file_list = self.MakeFileListQuery("'%s' in parents and trashed=false and %s" % (folder_id, files_mimelist_criteria))
+#####
 
-            file_list = self.MakeFileListQuery("'%s' in parents and trashed=false" % folder_id)
+#            file_list = self.MakeFileListQuery("'%s' in parents and trashed=false" % folder_id)
 
             #Folder is empty
             if not file_list:
@@ -1586,25 +1646,30 @@ class GoSyncModel(object):
                     return
 
                 self.fcount += 1
-                self.SendToLog(3, "Scanning: %s (%s -> %s)\n" % (f['name'], f['id'], folder_id))
-                GoSyncEventController().PostEvent(GOSYNC_EVENT_SCAN_UPDATE, {'Scanning Folder: %s' % f['name']})
+                self.SendToLog(3, "Scanning: %s (%s -> %s)" % (f['name'], f['id'], folder_id))
+                GoSyncEventController().PostEvent(GOSYNC_EVENT_SCAN_UPDATE, {'Scanning File: %s' % f['name']})
+                """
                 if f['mimeType'] == 'application/vnd.google-apps.folder':
                     self.driveTree.AddFolder(folder_id, f['id'], f['name'], f)
                     self.calculateUsageOfFolder(f['id'])
                 else:
+                
                     if not self.IsGoogleDocument(f):
-                        if any(f['mimeType'] in s for s in audio_file_mimelist):
-                            self.driveAudioUsage += self.GetFileSize(f)
-                        elif  any(f['mimeType'] in s for s in image_file_mimelist):
-                            self.drivePhotoUsage += self.GetFileSize(f)
-                        elif any(f['mimeType'] in s for s in movie_file_mimelist):
-                            self.driveMoviesUsage += self.GetFileSize(f)
-                        elif any(f['mimeType'] in s for s in document_file_mimelist):
-                            self.driveDocumentUsage += self.GetFileSize(f)
-                        else:
-                            self.driveOthersUsage += self.GetFileSize(f)
-                            #self.SendToLog(3,"calculateUsageOfFolder: Unknown Mime %s\n" % f['mimeType'])
-                        GoSyncEventController().PostEvent(GOSYNC_EVENT_CALCULATE_USAGE_UPDATE, self.fcount)
+                """
+#############################
+                if any(f['mimeType'] in s for s in audio_file_mimelist):
+                    self.driveAudioUsage += self.GetFileSize(f)
+                elif  any(f['mimeType'] in s for s in image_file_mimelist):
+                    self.drivePhotoUsage += self.GetFileSize(f)
+                elif any(f['mimeType'] in s for s in movie_file_mimelist):
+                    self.driveMoviesUsage += self.GetFileSize(f)
+                elif any(f['mimeType'] in s for s in document_file_mimelist):
+                    self.driveDocumentUsage += self.GetFileSize(f)
+                else:
+                    self.driveOthersUsage += self.GetFileSize(f)
+                    #self.SendToLog(3,"calculateUsageOfFolder: Unknown Mime %s\n" % f['mimeType'])
+                GoSyncEventController().PostEvent(GOSYNC_EVENT_CALCULATE_USAGE_UPDATE, self.fcount)
+#############################
         except:
             raise
 
@@ -1641,11 +1706,19 @@ class GoSyncModel(object):
             self.drivePhotoUsage = 0
             self.driveOthersUsage = 0
             self.fcount = 0
+            self.foldercount = 0
             try:
                 GoSyncEventController().PostEvent(GOSYNC_EVENT_CALCULATE_USAGE_STARTED, 0)
                 self.SendToLog(3,"CalculateUsage: Scanning files...\n")
                 try:
-                    self.calculateUsageOfFolder('root')
+                    self.createFolderTree('root')
+                    self.GetRootSyncSelection()
+                    for RemoteDirectory in self.init_sync_selection :
+                        if RemoteDirectory[0] == 'root' :
+                            parentID = RemoteDirectory[0]
+                        else :
+                            parentID = RemoteDirectory[1]
+                        self.calculateUsageOfFolder(parentID)
                     GoSyncEventController().PostEvent(GOSYNC_EVENT_CALCULATE_USAGE_DONE, 0)
                     #self.drive_usage_dict['Total Files'] = self.totalFilesToCheck
                     self.drive_usage_dict['Total Size'] = long(self.about_drive['storageQuota']['limit'])
@@ -1741,6 +1814,11 @@ class GoSyncModel(object):
             self.init_sync_selection.append([p.GetPath(), p.GetId()])
             self.GetRootChildSyncSelection(p)
 
+
+    def GetSelectedSyncSelection(self):
+        self.init_sync_selection = [['root', '']]
+        for selectedFolder in self.sync_selection:
+            self.init_sync_selection.append(selectedFolder)
 
     def GetRootSyncSelection(self):
         self.init_sync_selection = [['root', '']]
