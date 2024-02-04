@@ -34,7 +34,7 @@ class SettingsPage(wx.Panel):
     def __init__(self, parent, sync_model):
         wx.Panel.__init__(self, parent)
 
-        headerFont = wx.Font(11.5, wx.SWISS, wx.NORMAL, wx.NORMAL)
+        headerFont = wx.Font(12, wx.SWISS, wx.NORMAL, wx.NORMAL)
 
         self.sync_model = sync_model
         self.dstc = GoSyncDriveTree(self, pos=(0,0))
